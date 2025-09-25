@@ -1,10 +1,10 @@
 import os
 import requests
 import base64
-import flask
-import logging
 import telebot
 import sqlite3
+from flask import Flask  # <-- Add this
+from threading import Thread  # <-- Add this
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime
 
@@ -349,6 +349,8 @@ def broadcast_command(message):
     else:
         bot.reply_to(message, "❌ **Usage:** Reply to a message with `/broadcast` to send it to all users.")
 
+# ... all your existing code ...
+
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
     chat_id = message.chat.id
@@ -363,20 +365,18 @@ def handle_text(message):
     else:
         bot.reply_to(message, "👋 Welcome! Use /start to begin face swapping! ✨")
 
-print("🤖 Bot is running...")
-bot.polling()
+# ===== FLASK KEEP-ALIVE SETUP =====
 from flask import Flask
 from threading import Thread
-
 
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is running"
+    return "🤖 Face Swap Bot is running!"
 
-def run_flask():
-    app.run(host='0.0.0.0', port=8080)
+# Start Flask in background thread
+Thread(target=lambda: app.run(host='0.0.0.0', port=8080)).start()
 
-def keep_alive():
-    Thread(target=run_flask).start()
+print("🤖 Bot is running...")
+bot.polling()
