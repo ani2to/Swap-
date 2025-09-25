@@ -21,8 +21,8 @@ WAITING_FOR_TARGET = 2
 
 # Channel information
 CHANNELS = [
-    {"url": "https://t.me/+upKiHoHpBLUxNTI1", "name": "Channel 1", "chat_id": -1002438082284},
-    {"url": "https://t.me/+mL09ZgHctA5hZDA9", "name": "Channel 2", "chat_id": -1002267241920},
+    {"url": "https://t.me/+upKiHoHpBLUxNTI1", "name": "Channel 1", "chat_id": -1002267241920},
+    {"url": "https://t.me/+oOIaCEXNqK04M2Rl", "name": "Channel 2", "chat_id": -1002438082284},
     {"url": "https://t.me/SPBotz", "name": "SPBotz", "chat_id": "@SPBotz"},
     {"url": "https://t.me/itz_4nuj1", "name": "Anuj", "chat_id": "@itz_4nuj1"}
 ]
