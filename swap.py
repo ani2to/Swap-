@@ -1,6 +1,8 @@
 import os
 import requests
 import base64
+import flask
+import logging
 import telebot
 import sqlite3
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -363,3 +365,18 @@ def handle_text(message):
 
 print("🤖 Bot is running...")
 bot.polling()
+from flask import Flask
+from threading import Thread
+
+
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is running"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    Thread(target=run_flask).start()
