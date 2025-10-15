@@ -2,7 +2,7 @@ import os
 import requests
 import base64
 import telebot
-import sqlite3
+import pymongo
 import time
 from flask import Flask
 from threading import Thread
@@ -12,8 +12,23 @@ from datetime import datetime
 # Get credentials from environment variables
 BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
 WORKER_URL = os.environ.get('WORKER_URL', 'YOUR_API_URL_HERE')
+MONGO_URI = os.environ.get('MONGO_URI', 'YOUR_MONGODB_URI_HERE')
+LOG_CHANNEL_ID = os.environ.get('LOG_CHANNEL_ID', '-1001234567890')  # Add your log channel ID
 
 bot = telebot.TeleBot(BOT_TOKEN)
+
+# MongoDB setup
+try:
+    client = pymongo.MongoClient(MONGO_URI)
+    db = client.face_swap_bot
+    users_collection = db.users
+    api_usage_collection = db.api_usage
+    print("✅ Connected to MongoDB successfully!")
+except Exception as e:
+    print(f"❌ MongoDB connection error: {e}")
+    # Fallback to in-memory storage (will be lost on restart)
+    users_collection = None
+    api_usage_collection = None
 
 user_data = {}
 WAITING_FOR_SOURCE = 1
@@ -21,7 +36,7 @@ WAITING_FOR_TARGET = 2
 
 # Channel information
 CHANNELS = [
-    {"url": "https://t.me/+X4FghX8Jc5ZlNjE1", "name": "Channel 1", "chat_id": -1002267241920},
+    {"url": "https://t.me/+e7vg5ELF-SViY2Zl", "name": "Channel 1", "chat_id": -1002267241920},
     {"url": "https://t.me/+oOIaCEXNqK04M2Rl", "name": "Channel 2", "chat_id": -1002438082284},
     {"url": "https://t.me/SPBotz", "name": "SPBotz", "chat_id": "@SPBotz"},
     {"url": "https://t.me/itz_4nuj1", "name": "Anuj", "chat_id": "@itz_4nuj1"}
@@ -29,55 +44,97 @@ CHANNELS = [
 
 ADMIN_USERIDS = [6899720377, 6302016869]
 
-# Database setup
-def init_db():
-    conn = sqlite3.connect('bot_stats.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, 
-                  date_joined TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS api_usage
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, 
-                  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-    conn.commit()
-    conn.close()
-
-init_db()
-
 def add_user(user_id, username, first_name):
-    conn = sqlite3.connect('bot_stats.db')
-    c = conn.cursor()
-    c.execute('''INSERT OR IGNORE INTO users (user_id, username, first_name) 
-                 VALUES (?, ?, ?)''', (user_id, username, first_name))
-    conn.commit()
-    conn.close()
+    """Add user to MongoDB"""
+    if users_collection is None:
+        return
+    
+    try:
+        user_data = {
+            "user_id": user_id,
+            "username": username,
+            "first_name": first_name,
+            "date_joined": datetime.now()
+        }
+        
+        # Check if user already exists
+        existing_user = users_collection.find_one({"user_id": user_id})
+        if not existing_user:
+            users_collection.insert_one(user_data)
+            print(f"✅ New user added to MongoDB: {user_id}")
+            
+            # Send to log channel
+            send_to_log_channel(user_id, username, first_name)
+        else:
+            print(f"ℹ️ User already exists in MongoDB: {user_id}")
+            
+    except Exception as e:
+        print(f"❌ Error adding user to MongoDB: {e}")
+
+def send_to_log_channel(user_id, username, first_name):
+    """Send new user information to log channel"""
+    try:
+        log_message = f"""🆕 New user started the bot Face Swap bot !!
+
+👤 Name: {first_name} !!
+🆔 User ID: `{user_id}`
+📛 Username: @{username if username else 'No Username'}
+📩 Message: The user has started the bot."""
+        
+        bot.send_message(
+            LOG_CHANNEL_ID, 
+            log_message,
+            parse_mode='Markdown'
+        )
+        print(f"✅ Log sent to channel for user: {user_id}")
+    except Exception as e:
+        print(f"❌ Error sending to log channel: {e}")
 
 def record_api_usage(user_id):
-    conn = sqlite3.connect('bot_stats.db')
-    c = conn.cursor()
-    c.execute('''INSERT INTO api_usage (user_id) VALUES (?)''', (user_id,))
-    conn.commit()
-    conn.close()
+    """Record API usage in MongoDB"""
+    if api_usage_collection is None:
+        return
+    
+    try:
+        usage_data = {
+            "user_id": user_id,
+            "timestamp": datetime.now()
+        }
+        api_usage_collection.insert_one(usage_data)
+    except Exception as e:
+        print(f"❌ Error recording API usage: {e}")
 
 def get_user_stats():
-    conn = sqlite3.connect('bot_stats.db')
-    c = conn.cursor()
-    c.execute('''SELECT COUNT(*) FROM users''')
-    total_users = c.fetchone()[0]
-    c.execute('''SELECT COUNT(*) FROM api_usage''')
-    total_api_calls = c.fetchone()[0]
-    c.execute('''SELECT COUNT(*) FROM api_usage WHERE date(timestamp) = date('now')''')
-    today_api_calls = c.fetchone()[0]
-    conn.close()
-    return total_users, total_api_calls, today_api_calls
+    """Get user statistics from MongoDB"""
+    if users_collection is None or api_usage_collection is None:
+        return 0, 0, 0
+    
+    try:
+        total_users = users_collection.count_documents({})
+        total_api_calls = api_usage_collection.count_documents({})
+        
+        # Get today's API calls
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_api_calls = api_usage_collection.count_documents({
+            "timestamp": {"$gte": today_start}
+        })
+        
+        return total_users, total_api_calls, today_api_calls
+    except Exception as e:
+        print(f"❌ Error getting user stats: {e}")
+        return 0, 0, 0
 
 def get_all_users():
-    conn = sqlite3.connect('bot_stats.db')
-    c = conn.cursor()
-    c.execute('''SELECT user_id FROM users''')
-    users = [row[0] for row in c.fetchall()]
-    conn.close()
-    return users
+    """Get all user IDs from MongoDB"""
+    if users_collection is None:
+        return []
+    
+    try:
+        users = users_collection.find({}, {"user_id": 1})
+        return [user["user_id"] for user in users]
+    except Exception as e:
+        print(f"❌ Error getting all users: {e}")
+        return []
 
 def check_subscription(user_id):
     try:
