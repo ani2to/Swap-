@@ -9,32 +9,30 @@ from threading import Thread
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime
 
-# Get credentials from environment variables
 BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
 WORKER_URL = os.environ.get('WORKER_URL', 'YOUR_API_URL_HERE')
 MONGO_URI = os.environ.get('MONGO_URI', 'YOUR_MONGODB_URI_HERE')
-LOG_CHANNEL_ID = os.environ.get('LOG_CHANNEL_ID', '-1001234567890')  # Add your log channel ID
+LOG_CHANNEL_ID = os.environ.get('LOG_CHANNEL_ID', '-1001234567890')
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# MongoDB setup
 try:
     client = pymongo.MongoClient(MONGO_URI)
     db = client.face_swap_bot
     users_collection = db.users
     api_usage_collection = db.api_usage
+    banned_users_collection = db.banned_users
     print("✅ Connected to MongoDB successfully!")
 except Exception as e:
     print(f"❌ MongoDB connection error: {e}")
-    # Fallback to in-memory storage (will be lost on restart)
     users_collection = None
     api_usage_collection = None
+    banned_users_collection = None
 
 user_data = {}
 WAITING_FOR_SOURCE = 1
 WAITING_FOR_TARGET = 2
 
-# Channel information
 CHANNELS = [
     {"url": "https://t.me/+qy5q53874S1hMzZl", "name": "Channel 1", "chat_id": -1002267241920},
     {"url": "https://t.me/+oOIaCEXNqK04M2Rl", "name": "Channel 2", "chat_id": -1002438082284},
@@ -45,7 +43,6 @@ CHANNELS = [
 ADMIN_USERIDS = [6899720377, 6302016869]
 
 def add_user(user_id, username, first_name):
-    """Add user to MongoDB"""
     if users_collection is None:
         return
     
@@ -57,13 +54,11 @@ def add_user(user_id, username, first_name):
             "date_joined": datetime.now()
         }
         
-        # Check if user already exists
         existing_user = users_collection.find_one({"user_id": user_id})
         if not existing_user:
             users_collection.insert_one(user_data)
             print(f"✅ New user added to MongoDB: {user_id}")
             
-            # Send to log channel
             send_to_log_channel(user_id, username, first_name)
         else:
             print(f"ℹ️ User already exists in MongoDB: {user_id}")
@@ -72,7 +67,6 @@ def add_user(user_id, username, first_name):
         print(f"❌ Error adding user to MongoDB: {e}")
 
 def send_to_log_channel(user_id, username, first_name):
-    """Send new user information to log channel"""
     try:
         log_message = f"""🆕 New user started the bot Face Swap bot !!
 
@@ -91,7 +85,6 @@ def send_to_log_channel(user_id, username, first_name):
         print(f"❌ Error sending to log channel: {e}")
 
 def record_api_usage(user_id):
-    """Record API usage in MongoDB"""
     if api_usage_collection is None:
         return
     
@@ -105,7 +98,6 @@ def record_api_usage(user_id):
         print(f"❌ Error recording API usage: {e}")
 
 def get_user_stats():
-    """Get user statistics from MongoDB"""
     if users_collection is None or api_usage_collection is None:
         return 0, 0, 0
     
@@ -113,7 +105,6 @@ def get_user_stats():
         total_users = users_collection.count_documents({})
         total_api_calls = api_usage_collection.count_documents({})
         
-        # Get today's API calls
         today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         today_api_calls = api_usage_collection.count_documents({
             "timestamp": {"$gte": today_start}
@@ -125,7 +116,6 @@ def get_user_stats():
         return 0, 0, 0
 
 def get_all_users():
-    """Get all user IDs from MongoDB"""
     if users_collection is None:
         return []
     
@@ -135,6 +125,67 @@ def get_all_users():
     except Exception as e:
         print(f"❌ Error getting all users: {e}")
         return []
+
+def is_user_banned(user_id):
+    if banned_users_collection is None:
+        return False
+    
+    try:
+        banned_user = banned_users_collection.find_one({"user_id": user_id})
+        return banned_user is not None
+    except Exception as e:
+        print(f"❌ Error checking banned user: {e}")
+        return False
+
+def get_ban_reason(user_id):
+    if banned_users_collection is None:
+        return None
+    
+    try:
+        banned_user = banned_users_collection.find_one({"user_id": user_id})
+        if banned_user and "reason" in banned_user:
+            return banned_user["reason"]
+        return None
+    except Exception as e:
+        print(f"❌ Error getting ban reason: {e}")
+        return None
+
+def ban_user(user_id, banned_by, reason=""):
+    if banned_users_collection is None:
+        return False
+    
+    try:
+        ban_data = {
+            "user_id": user_id,
+            "banned_by": banned_by,
+            "reason": reason,
+            "banned_at": datetime.now()
+        }
+        
+        existing_ban = banned_users_collection.find_one({"user_id": user_id})
+        if existing_ban:
+            banned_users_collection.update_one(
+                {"user_id": user_id},
+                {"$set": {"reason": reason, "banned_at": datetime.now(), "banned_by": banned_by}}
+            )
+        else:
+            banned_users_collection.insert_one(ban_data)
+        
+        return True
+    except Exception as e:
+        print(f"❌ Error banning user: {e}")
+        return False
+
+def unban_user(user_id):
+    if banned_users_collection is None:
+        return False
+    
+    try:
+        result = banned_users_collection.delete_one({"user_id": user_id})
+        return result.deleted_count > 0
+    except Exception as e:
+        print(f"❌ Error unbanning user: {e}")
+        return False
 
 def check_subscription(user_id):
     try:
@@ -196,6 +247,14 @@ def start_help(message):
         username = message.from_user.username or "Unknown"
         first_name = message.from_user.first_name or "User"
         
+        if is_user_banned(user_id):
+            ban_reason = get_ban_reason(user_id)
+            ban_message = f"❌ You are banned from using this bot."
+            if ban_reason:
+                ban_message += f"\nReason: {ban_reason}"
+            bot.send_message(chat_id, ban_message)
+            return
+        
         add_user(user_id, username, first_name)
         
         if not check_subscription(user_id):
@@ -239,6 +298,14 @@ def swap_command(message):
         chat_id = message.chat.id
         user_id = message.from_user.id
         
+        if is_user_banned(user_id):
+            ban_reason = get_ban_reason(user_id)
+            ban_message = f"❌ You are banned from using this bot."
+            if ban_reason:
+                ban_message += f"\nReason: {ban_reason}"
+            bot.reply_to(message, ban_message)
+            return
+        
         if not check_subscription(user_id):
             bot.reply_to(message, "❌ Please join all channels first using /start")
             return
@@ -258,6 +325,14 @@ def check_subscription_callback(call):
         chat_id = call.message.chat.id
         user_id = call.from_user.id
         first_name = call.from_user.first_name or "User"
+        
+        if is_user_banned(user_id):
+            ban_reason = get_ban_reason(user_id)
+            ban_message = f"❌ You are banned from using this bot."
+            if ban_reason:
+                ban_message += f"\nReason: {ban_reason}"
+            bot.answer_callback_query(call.id, ban_message, show_alert=True)
+            return
         
         if check_subscription(user_id):
             try:
@@ -292,6 +367,14 @@ def handle_photo(message):
     try:
         user_id = message.from_user.id
         
+        if is_user_banned(user_id):
+            ban_reason = get_ban_reason(user_id)
+            ban_message = f"❌ You are banned from using this bot."
+            if ban_reason:
+                ban_message += f"\nReason: {ban_reason}"
+            bot.reply_to(message, ban_message)
+            return
+        
         if not check_subscription(user_id):
             bot.reply_to(message, "❌ Please join all channels first using /start")
             return
@@ -302,7 +385,6 @@ def handle_photo(message):
         img_bytes = requests.get(file_url, timeout=30).content
 
         if chat_id not in user_data:
-            # Save source image
             user_data[chat_id] = {
                 "state": WAITING_FOR_TARGET,
                 "source": img_bytes
@@ -318,7 +400,6 @@ def handle_photo(message):
                 source_b64 = base64.b64encode(user_data[chat_id]["source"]).decode('utf-8').replace('\n','')
                 target_b64 = base64.b64encode(user_data[chat_id]["target"]).decode('utf-8').replace('\n','')
 
-                # YOUR ORIGINAL API PAYLOAD WITH SECURITY TOKEN
                 payload = {
                     "source": source_b64,
                     "target": target_b64,
@@ -329,7 +410,6 @@ def handle_photo(message):
                     }
                 }
 
-                # Send request to Cloudflare Worker
                 response = requests.post(WORKER_URL, json=payload, timeout=60)
 
                 try:
@@ -339,7 +419,6 @@ def handle_photo(message):
 
                 if response.status_code == 200:
                     record_api_usage(user_id)
-                    # Send PNG directly to Telegram
                     with open("swapped.png", "wb") as f:
                         f.write(response.content)
                     with open("swapped.png", "rb") as photo:
@@ -355,7 +434,129 @@ def handle_photo(message):
         if chat_id in user_data:
             del user_data[chat_id]
 
-# ===== Admin Commands =====
+@bot.message_handler(commands=['ban'])
+def ban_command(message):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_USERIDS:
+        bot.reply_to(message, "❌ Access Denied! Admin only command.")
+        return
+    
+    try:
+        command_parts = message.text.split()
+        
+        if len(command_parts) < 2:
+            bot.reply_to(message, "❌ Usage: /ban <user_id> <reason> OR reply to user's message with /ban <reason>")
+            return
+        
+        if message.reply_to_message:
+            target_user_id = message.reply_to_message.from_user.id
+            target_username = message.reply_to_message.from_user.username or "No username"
+            target_first_name = message.reply_to_message.from_user.first_name or "Unknown"
+            
+            reason = "No reason provided"
+            if len(command_parts) > 1:
+                reason = ' '.join(command_parts[1:])
+        else:
+            try:
+                target_user_id = int(command_parts[1])
+                target_username = "Unknown"
+                target_first_name = "User"
+                
+                reason = "No reason provided"
+                if len(command_parts) > 2:
+                    reason = ' '.join(command_parts[2:])
+            except ValueError:
+                bot.reply_to(message, "❌ Invalid user ID. Please provide a numeric user ID.")
+                return
+        
+        if is_user_banned(target_user_id):
+            bot.reply_to(message, f"⚠️ User {target_user_id} is already banned.")
+            return
+        
+        if ban_user(target_user_id, user_id, reason):
+            bot.reply_to(message, f"✅ User {target_user_id} has been banned.\nReason: {reason}")
+            
+            try:
+                bot.send_message(target_user_id, f"❌ You have been banned from using Face Swap Bot.\nReason: {reason}")
+            except:
+                pass
+        else:
+            bot.reply_to(message, "❌ Failed to ban user.")
+            
+    except Exception as e:
+        print(f"Error in ban command: {e}")
+        bot.reply_to(message, "❌ An error occurred while processing ban command.")
+
+@bot.message_handler(commands=['unban'])
+def unban_command(message):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_USERIDS:
+        bot.reply_to(message, "❌ Access Denied! Admin only command.")
+        return
+    
+    try:
+        command_parts = message.text.split()
+        if len(command_parts) < 2:
+            bot.reply_to(message, "❌ Usage: /unban <user_id>")
+            return
+        
+        target_user_id = int(command_parts[1])
+        
+        if not is_user_banned(target_user_id):
+            bot.reply_to(message, f"⚠️ User {target_user_id} is not banned.")
+            return
+        
+        if unban_user(target_user_id):
+            bot.reply_to(message, f"✅ User {target_user_id} has been unbanned.")
+            
+            try:
+                bot.send_message(target_user_id, "✅ Your ban has been lifted. You can now use the bot again.")
+            except:
+                pass
+        else:
+            bot.reply_to(message, "❌ Failed to unban user.")
+    except ValueError:
+        bot.reply_to(message, "❌ Invalid user ID. Please provide a numeric user ID.")
+    except Exception as e:
+        print(f"Error in unban command: {e}")
+        bot.reply_to(message, "❌ An error occurred while processing unban command.")
+
+@bot.message_handler(commands=['banned'])
+def banned_list_command(message):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_USERIDS:
+        bot.reply_to(message, "❌ Access Denied! Admin only command.")
+        return
+    
+    try:
+        if banned_users_collection is None:
+            bot.reply_to(message, "❌ Database not available.")
+            return
+        
+        banned_users = list(banned_users_collection.find({}))
+        
+        if not banned_users:
+            bot.reply_to(message, "📭 No users are currently banned.")
+            return
+        
+        banned_list_text = "🚫 Banned Users:\n\n"
+        for user in banned_users:
+            user_id = user.get('user_id', 'Unknown')
+            reason = user.get('reason', 'No reason provided')
+            banned_at = user.get('banned_at', datetime.now())
+            banned_by = user.get('banned_by', 'Unknown')
+            
+            banned_list_text += f"👤 User ID: `{user_id}`\n"
+            banned_list_text += f"📝 Reason: {reason}\n"
+            banned_list_text += f"🕒 Banned at: {banned_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            banned_list_text += f"👮 Banned by: {banned_by}\n"
+            banned_list_text += "─" * 30 + "\n"
+        
+        bot.reply_to(message, banned_list_text, parse_mode='Markdown')
+    except Exception as e:
+        print(f"Error in banned command: {e}")
+        bot.reply_to(message, "❌ An error occurred while fetching banned users list.")
+
 @bot.message_handler(commands=['stats'])
 def stats_command(message):
     user_id = message.from_user.id
@@ -430,11 +631,18 @@ Success rate: {(success/len(users))*100:.1f}%"""
     else:
         bot.reply_to(message, "❌ Usage: Reply to a message with /broadcast to send it to all users")
 
-# ===== Handle text messages =====
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
+    
+    if is_user_banned(user_id):
+        ban_reason = get_ban_reason(user_id)
+        ban_message = f"❌ You are banned from using this bot."
+        if ban_reason:
+            ban_message += f"\nReason: {ban_reason}"
+        bot.reply_to(message, ban_message)
+        return
     
     if not check_subscription(user_id):
         bot.reply_to(message, "❌ Please join all channels first using /start")
@@ -445,7 +653,6 @@ def handle_text(message):
     else:
         bot.reply_to(chat_id, "👋 Welcome! Use /swap to begin face swapping! ✨")
 
-# ===== FLASK KEEP-ALIVE SETUP =====
 app = Flask(__name__)
 
 @app.route('/')
@@ -460,7 +667,6 @@ def run_flask():
     app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
 
 def run_bot():
-    """Run bot with error handling and auto-restart"""
     while True:
         try:
             print("🤖 Starting Telegram Bot...")
@@ -471,10 +677,8 @@ def run_bot():
             time.sleep(10)
 
 if __name__ == "__main__":
-    # Start Flask in background thread
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
     
-    # Start bot with auto-restart
     print("🚀 Starting Face Swap Bot...")
     run_bot()
